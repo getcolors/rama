@@ -50,7 +50,7 @@
 ;; cannot resolve its own library says so rather than inventing a SHA or
 ;; silently falling back to whatever is lying around. `bb pin` refuses to stamp
 ;; a dirty or unpushed HEAD for the same reason.
-(def ^:private rama-sha "53d0b7d4b599c159f0c5a9e49e5dd45fcf8c3f51")
+(def ^:private rama-sha "6ff19acd36ea4a924b8d72ecc2351c802b3274aa")
 
 (def ^:private rama-git-url "https://github.com/getcolors/rama.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
