@@ -8,6 +8,6 @@ grep -q 'io.github.getcolors.rama.operator/run' "$launcher"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cp "$launcher" "$tmp/green"; chmod +x "$tmp/green"
 sed "s#WORKDIR#.colors#" "$root/test/fixtures/colors.yml" > "$tmp/colors.yml"
-(cd "$tmp" && RAMA_LIB_ROOT="$root" GREEN_LIB_ROOT="$root/../green" ONCE_LIB_ROOT="$root/../once" ./green build >/dev/null)
+(cd "$tmp" && RAMA_LIB_ROOT="$root" ./green build >/dev/null)
 [[ -f "$tmp/.colors/rama-fixture/rama-infrastructure/main.tf" ]]
 echo 'launcher: all checks passed'
