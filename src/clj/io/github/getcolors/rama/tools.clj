@@ -58,7 +58,10 @@
 
 (defn infrastructure-data [opts]
   (assoc opts
-         :digitalocean-ssh-key-fingerprint (ssh-fingerprint (:digitalocean-ssh-authorized-keys opts))
+         :digitalocean-ssh-key-fingerprint
+         (if (= :build (:green/event opts))
+           "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+           (ssh-fingerprint (:digitalocean-ssh-authorized-keys opts)))
          :ssh-sources-hcl (tofu/hcl-list (cidrs opts :digitalocean-ssh-sources))
          :wireguard-sources-hcl (tofu/hcl-list (cidrs opts :digitalocean-wireguard-sources))))
 

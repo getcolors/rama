@@ -8,7 +8,7 @@ provider "digitalocean" {}
 data "digitalocean_ssh_keys" "operator" {
   filter {
     key    = "fingerprint"
-    values = ["c8:24:b0:7f:94:28:37:5a:23:d6:02:8b:b0:00:d7:7a"]
+    values = ["00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"]
   }
 }
 
