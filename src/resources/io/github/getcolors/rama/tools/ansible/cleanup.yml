@@ -1,0 +1,12 @@
+---
+- name: Disconnect local WireGuard
+  hosts: local
+  gather_facts: false
+  become: true
+  tasks:
+    - ansible.builtin.shell: wg-quick down /etc/wireguard/<{ wireguard-interface }>.conf 2>/dev/null || true
+      args: {executable: /bin/bash}
+      environment:
+        PATH: "{{ lookup('env','PATH') }}"
+      changed_when: false
+    - ansible.builtin.file: {path: /etc/wireguard/<{ wireguard-interface }>.conf, state: absent}

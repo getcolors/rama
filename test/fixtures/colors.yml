@@ -1,0 +1,34 @@
+profile: rama-fixture
+workdir: WORKDIR
+provider-compute: digitalocean
+provider-dns: false
+provider-smtp: false
+provider-backend: local
+compute-prevent-destroy: true
+rama-cluster-name: rama-fixture
+rama-deployment: single-node
+rama-version: 1.9.0
+rama-source-url: https://example.com/rama-1.9.0.zip
+rama-license: false
+zookeeper-version: 3.8.4
+zookeeper-source-url: https://example.com/zookeeper-3.8.4.tar.gz
+java-version: 21
+rama-data-dir: /data/rama
+rama-supervisor-port-range: [20000, 21000]
+digitalocean-name: rama-fixture
+digitalocean-region: ams3
+digitalocean-size: s-8vcpu-16gb
+digitalocean-image: ubuntu-24-04-x64
+digitalocean-ssh-authorized-keys: ~/.ssh/id_ed25519.pub
+digitalocean-vpc-cidr: 10.24.0.0/20
+digitalocean-ssh-sources: [192.0.2.1/32]
+digitalocean-wireguard-sources: [0.0.0.0/0, "::/0"]
+wireguard-port: 51820
+wireguard-network-cidr: 10.25.0.0/24
+wireguard-server-address: 10.25.0.1/24
+wireguard-client-address: 10.25.0.2/32
+wireguard-client-name: rama-fixture
+rama-host: rama.example.com
+cloudflare-zone: example.com
+cloudflare-proxied: false
+rama-smtp-from: rama@notifications.example.com

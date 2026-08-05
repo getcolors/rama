@@ -1,0 +1,20 @@
+{:paths ["test/clj" "test/resources"]
+ :deps {io.github.getcolors/rama {:local/root "."}
+        io.github.getcolors/green {:local/root "../green"}
+        io.github.getcolors/once {:local/root "../once/green"}}
+ :tasks
+ {test {:requires ([clojure.test :as t]
+                   [io.github.getcolors.rama.validate-test]
+                   [io.github.getcolors.rama.tools-test]
+                   [io.github.getcolors.rama.workflow-test]
+                   [io.github.getcolors.rama.operator-test])
+        :task (let [{:keys [fail error]}
+                    (t/run-tests 'io.github.getcolors.rama.validate-test
+                                 'io.github.getcolors.rama.tools-test
+                                 'io.github.getcolors.rama.workflow-test
+                                 'io.github.getcolors.rama.operator-test)]
+                (System/exit (if (pos? (+ fail error)) 1 0)))}
+  golden {:task (shell "./scripts/golden.sh")}
+  golden:accept {:task (shell "./scripts/golden.sh" "--accept")}
+  pin {:task (load-file "tasks/pin.clj")}
+  rama {:task (shell "./green" "build")}}}

@@ -1,0 +1,213 @@
+---
+- name: Prepare local WireGuard identity
+  hosts: local
+  gather_facts: false
+  become: false
+  vars:
+    wg_state_dir: "{{ lookup('env','HOME') }}/.local/state/rama/<{ profile }>"
+  tasks:
+    - ansible.builtin.file: {path: "{{ wg_state_dir }}", state: directory, mode: "0700"}
+    - name: Generate retained local WireGuard key
+      ansible.builtin.shell: |
+        set -o pipefail; umask 077; wg genkey > "{{ wg_state_dir }}/private.key"
+      args: {executable: /bin/bash, creates: "{{ wg_state_dir }}/private.key"}
+      no_log: true
+    - name: Derive local public key
+      ansible.builtin.shell: wg pubkey < "{{ wg_state_dir }}/private.key" > "{{ wg_state_dir }}/public.key"
+      args: {creates: "{{ wg_state_dir }}/public.key"}
+      no_log: true
+
+- name: Install and configure Rama
+  hosts: rama
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - ansible.builtin.wait_for_connection: {connect_timeout: 10, delay: 5, sleep: 5, timeout: 600}
+    - ansible.builtin.setup:
+  tasks:
+    - name: Install packages
+      ansible.builtin.apt:
+        name: ["openjdk-<{ java-version }>-jdk-headless", unzip, curl, wireguard-tools, ufw<% if smtp-enabled %>, msmtp, msmtp-mta<% endif %>]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - ansible.builtin.file: {path: /etc/wireguard, state: directory, mode: "0700"}
+    - name: Generate retained server WireGuard key
+      ansible.builtin.shell: "set -o pipefail; umask 077; wg genkey > /etc/wireguard/private.key"
+      args: {executable: /bin/bash, creates: /etc/wireguard/private.key}
+      no_log: true
+    - name: Read server private key
+      ansible.builtin.slurp: {src: /etc/wireguard/private.key}
+      register: server_wg_private
+      no_log: true
+    - name: Read local public key
+      ansible.builtin.set_fact:
+        local_wg_public: "{{ lookup('file', lookup('env','HOME') + '/.local/state/rama/<{ profile }>/public.key') }}"
+    - name: Configure server WireGuard
+      ansible.builtin.copy:
+        dest: /etc/wireguard/wg-rama.conf
+        mode: "0600"
+        content: |
+          [Interface]
+          Address = <{ wireguard-server-address }>
+          ListenPort = <{ wireguard-port }>
+          PrivateKey = {{ server_wg_private.content | b64decode | trim }}
+
+          [Peer]
+          PublicKey = {{ local_wg_public | trim }}
+          AllowedIPs = <{ wireguard-client-address }>
+          PersistentKeepalive = 25
+      no_log: true
+      notify: Restart WireGuard
+    - ansible.builtin.systemd_service: {name: wg-quick@wg-rama, enabled: true, state: started}
+    - name: Configure host firewall
+      ansible.builtin.shell: |
+        set -e
+        ufw --force reset
+        ufw default deny incoming
+        ufw default allow outgoing
+        ufw allow from <{ ssh-source }> to any port 22 proto tcp
+        ufw allow <{ wireguard-port }>/udp
+        ufw allow in on wg-rama
+        ufw --force enable
+      args: {executable: /bin/bash}
+      changed_when: true
+    - ansible.builtin.file: {path: "<{ rama-data-dir }>", state: directory, mode: "0755"}
+    - ansible.builtin.file: {path: /opt/zookeeper, state: directory, mode: "0755"}
+    - name: Download Rama
+      ansible.builtin.get_url: {url: "<{ rama-source-url }>", dest: /tmp/rama.zip, mode: "0644"}
+    - name: Unpack Rama
+      ansible.builtin.unarchive: {src: /tmp/rama.zip, dest: "<{ rama-data-dir }>", remote_src: true, creates: "<{ rama-data-dir }>/rama"}
+    - name: Download ZooKeeper
+      ansible.builtin.get_url: {url: "<{ zookeeper-source-url }>", dest: /tmp/zookeeper.tar.gz, mode: "0644"}
+    - name: Unpack ZooKeeper
+      ansible.builtin.unarchive: {src: /tmp/zookeeper.tar.gz, dest: /opt/zookeeper, remote_src: true, extra_opts: [--strip-components=1], creates: /opt/zookeeper/bin/zkServer.sh}
+    - ansible.builtin.file: {path: /var/lib/zookeeper, state: directory, mode: "0755"}
+    - name: Configure ZooKeeper
+      ansible.builtin.copy:
+        dest: /opt/zookeeper/conf/zoo.cfg
+        mode: "0644"
+        content: |
+          tickTime=2000
+          dataDir=/var/lib/zookeeper
+          clientPort=2000
+          clientPortAddress=<{ wireguard-server-ip }>
+          autopurge.snapRetainCount=3
+          autopurge.purgeInterval=24
+    - name: Configure Rama
+      ansible.builtin.copy:
+        dest: "<{ rama-data-dir }>/rama.yaml"
+        mode: "0644"
+        content: |
+          supervisor.port.range:
+            - <{ supervisor-port-low }>
+            - <{ supervisor-port-high }>
+          worker.child.opts: "-Xms8192m -Xmx8192m -Xmn4096m -XX:SurvivorRatio=4 -XX:MaxTenuringThreshold=6"
+          conductor.child.opts: "-Xms1g -Xmx2g"
+          local.dir: "<{ rama-data-dir }>/local-rama-data"
+          zookeeper.servers:
+            - "<{ wireguard-server-ip }>"
+          conductor.host: "<{ wireguard-server-ip }>"
+          supervisor.host: "<{ wireguard-server-ip }>"
+    - name: Install systemd units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}.service"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description={{ item.description }}
+          After=network-online.target wg-quick@wg-rama.service {{ item.after }}
+          Wants=network-online.target
+          Requires={{ item.requires }}
+          [Service]
+          WorkingDirectory={{ item.workdir }}
+          ExecStart={{ item.command }}
+          Restart=always
+          RestartSec=3
+          KillMode=process
+          [Install]
+          WantedBy=multi-user.target
+      loop:
+        - {name: zookeeper, description: "ZooKeeper", workdir: /opt/zookeeper, command: "/opt/zookeeper/bin/zkServer.sh --config /opt/zookeeper/conf start-foreground", after: "", requires: ""}
+        - {name: conductor, description: "Rama Conductor", workdir: "<{ rama-data-dir }>", command: "<{ rama-data-dir }>/rama conductor", after: zookeeper.service, requires: zookeeper.service}
+        - {name: supervisor, description: "Rama Supervisor", workdir: "<{ rama-data-dir }>", command: "<{ rama-data-dir }>/rama supervisor", after: zookeeper.service, requires: zookeeper.service}
+      notify: Reload services
+    - ansible.builtin.meta: flush_handlers
+    - ansible.builtin.systemd_service: {name: zookeeper, enabled: true, state: started}
+    - name: Wait for ZooKeeper
+      ansible.builtin.wait_for: {host: "<{ wireguard-server-ip }>", port: 2000, timeout: 180}
+    - ansible.builtin.systemd_service: {name: conductor, enabled: true, state: started}
+    - ansible.builtin.systemd_service: {name: supervisor, enabled: true, state: started}
+<% if rama-license %>    - name: Install optional Rama license
+      ansible.builtin.copy:
+        src: "{{ lookup('env','COLORS_PAR_RAMA_LICENSE_SOURCE_PATH') }}"
+        dest: /root/rama.license
+        mode: "0600"
+      no_log: true
+<% endif %><% if smtp-enabled %>    - name: Configure Resend relay
+      ansible.builtin.copy:
+        dest: /etc/msmtprc
+        mode: "0600"
+        content: |
+          defaults
+          auth on
+          tls on
+          tls_starttls on
+          account resend
+          host smtp.resend.com
+          port 587
+          user resend
+          password {{ lookup('env','COLORS_PAR_RESEND_PASSWORD') }}
+          from <{ rama-smtp-from }>
+          account default : resend
+      no_log: true
+<% endif %>  handlers:
+    - name: Restart WireGuard
+      ansible.builtin.systemd_service: {name: wg-quick@wg-rama, state: restarted}
+    - name: Reload services
+      ansible.builtin.systemd_service: {daemon_reload: true}
+
+- name: Connect workstation WireGuard
+  hosts: local
+  gather_facts: false
+  become: true
+  vars:
+    wg_state_dir: "{{ lookup('env','HOME') }}/.local/state/rama/<{ profile }>"
+  tasks:
+    - ansible.builtin.slurp: {src: "{{ wg_state_dir }}/private.key"}
+      register: local_wg_private
+      become: false
+      no_log: true
+    - name: Fetch server public key
+      ansible.builtin.command: wg pubkey
+      args: {stdin: "{{ hostvars[groups['rama'][0]].server_wg_private.content | b64decode | trim }}"}
+      delegate_to: localhost
+      become: false
+      register: server_wg_public
+      no_log: true
+    - ansible.builtin.file: {path: /etc/wireguard, state: directory, mode: "0700"}
+    - name: Configure local WireGuard
+      ansible.builtin.copy:
+        dest: /etc/wireguard/<{ wireguard-interface }>.conf
+        mode: "0600"
+        content: |
+          [Interface]
+          Address = <{ wireguard-client-address }>
+          PrivateKey = {{ local_wg_private.content | b64decode | trim }}
+
+          [Peer]
+          PublicKey = {{ server_wg_public.stdout | trim }}
+          AllowedIPs = <{ wireguard-server-ip }>/32
+          Endpoint = <{ wireguard-endpoint }>:<{ wireguard-port }>
+          PersistentKeepalive = 25
+      no_log: true
+    - name: Reconnect local WireGuard
+      ansible.builtin.shell: |
+        wg-quick down /etc/wireguard/<{ wireguard-interface }>.conf 2>/dev/null || true
+        wg-quick up /etc/wireguard/<{ wireguard-interface }>.conf
+      args: {executable: /bin/bash}
+      environment:
+        PATH: "{{ lookup('env','PATH') }}"
+      changed_when: true
+    - ansible.builtin.command: ping -c 1 -W 5 <{ wireguard-server-ip }>
+      changed_when: false
