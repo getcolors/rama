@@ -1,4 +1,4 @@
-profile: rama-local
+profile: rama-example
 workdir: .colors
 provider-compute: digitalocean
 provider-dns: false
