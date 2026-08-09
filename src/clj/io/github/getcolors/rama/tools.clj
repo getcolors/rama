@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [green.ansible :as ansible]
+            [green.cli :as green-cli]
             [green.process :as process]
             [green.scaffold :as sc]
             [green.tofu :as tofu]
@@ -19,19 +20,14 @@
 (def smtp-post-tool "tofu-smtp-post")
 (def ansible-tool "rama-ansible")
 (def root "io.github.getcolors.rama.tools")
-(def raw-template :io.github.getcolors.rama/raw)
-(def template-opts {:tag-open \< :tag-close \> :filter-open \{ :filter-close \}})
+(def template-opts sc/preserve-jinja-delimiters)
 
 (defn tool-dir [opts tool]
-  (let [workdir (io/file (or (:workdir opts) ".colors"))
-        state-dir (when-not (.isAbsolute workdir)
-                    (some-> (:green/state-file opts) io/file .getAbsoluteFile .getParent))
-        base (if state-dir (io/file state-dir workdir) workdir)]
-    (str (io/file base (or (:profile opts) "rama") tool))))
+  (green-cli/stage-dir opts tool {:default-profile "rama"}))
 (defn delegated-tool-dir [opts tool] (once-tools/tool-dir opts tool))
 (defn template [path file] (keyword (str root "." path) file))
 (defn spec [template target data] {:template template :target target :data data :opts template-opts})
-(defn raw-spec [target content] (spec raw-template target {:content content}))
+(defn raw-spec [target content] (sc/content-spec target content))
 
 (defn cidrs [opts k]
   (let [v (get opts k) xs (if (sequential? v) v (str/split (str v) #"[,\s]+"))]

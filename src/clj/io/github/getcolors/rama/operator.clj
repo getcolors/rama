@@ -33,11 +33,7 @@
     (spit (io/file dir "rama.yaml") (rama-yaml opts))
     (str executable)))
 
-(defn inherit-run [argv]
-  (try
-    (let [child (-> (ProcessBuilder. ^java.util.List (mapv str argv)) .inheritIO .start)]
-      {:exit (.waitFor child)})
-    (catch Exception e {:exit -1 :err (ex-message e)})))
+(def inherit-run process/run-inherit)
 
 (defn command [opts args] (into [(prepare! opts)] args))
 

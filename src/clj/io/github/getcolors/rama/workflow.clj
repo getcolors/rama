@@ -3,6 +3,7 @@
             [clojure.walk :as walk]
             [green.cli :as green-cli]
             [green.dry-run :as dry-run]
+            [green.lifecycle :as lifecycle]
             [green.progress :as progress]
             [green.tofu :as tofu]
             [green.workflow :as wf]
@@ -28,21 +29,24 @@
 (defn start-step
   ([opts] (start-step opts (System/getenv)))
   ([opts env]
-   (let [opts (green-cli/read-pars (merge defaults opts) env)
-         real? (not (:green/dry-run opts)) event (:green/event opts)
-         lifecycle? (contains? #{:create :delete} event)
-         errors (vec (concat (validate/env-errors env)
-                             (validate/state-errors opts)
-                             (when (and real? lifecycle?) (validate/secret-errors opts))
-                             (when (and real? (= :delete event)
-                                        (:compute-prevent-destroy opts))
-                               [(str "compute destruction is protected; set "
-                                     (green-cli/par-name :compute-prevent-destroy)
-                                     "=false to delete")])))]
-     (cond
-       (seq errors) (assoc opts :green/exit 2 :green/err (str/join "\n" errors))
-       (and real? (= :delete event)) (assoc (adopt-existing-state opts) :green/exit 0)
-       :else (assoc opts :green/exit 0)))))
+   (lifecycle/preflight
+    opts {:defaults defaults :overlay green-cli/read-pars
+          :validators
+          [(fn [_ env _] (validate/env-errors env))
+           (fn [opts _ _] (validate/state-errors opts))
+           (fn [opts _ {:keys [event real?]}]
+             (when (and real? (contains? #{:create :delete} event))
+               (validate/secret-errors opts)))
+           (fn [opts _ {:keys [event real?]}]
+             (when (and real? (= :delete event) (:compute-prevent-destroy opts))
+               [(str "compute destruction is protected; set "
+                     (green-cli/par-name :compute-prevent-destroy) "=false to delete")]))]
+          :after-validate
+          (fn [opts _ {:keys [event real?]}]
+            (if (and real? (= :delete event))
+              (assoc (adopt-existing-state opts) :green/exit 0)
+              (assoc opts :green/exit 0)))}
+    env)))
 
 (defn wire-fn [step run-opts]
   (if (= :delete (:green/event run-opts))
@@ -63,14 +67,8 @@
       :rama/acceptance [tools/acceptance-step])))
 
 (defn backend-advice [dir-fn tool]
-  (let [key #(str (:profile %) "/" tool ".tfstate")]
-    (tofu/backends
-     #(or (:provider-backend %) "local")
-     {"local" (tofu/local-backend-advice dir-fn)
-      "s3" (tofu/s3-backend-advice dir-fn #(hash-map :bucket (:s3-bucket %)
-                                                       :key (key %) :region (:s3-region %)))
-      "r2" (tofu/r2-backend-advice dir-fn #(hash-map :bucket (:r2-bucket %)
-                                                       :key (key %) :endpoint (:r2-endpoint %)))})))
+  (tofu/conventional-backend-advice
+   {:dir-fn dir-fn :key-fn #(str (:profile %) "/" tool ".tfstate")}))
 (defn own-backend [tool] (backend-advice #(tools/tool-dir % tool) tool))
 (defn delegated-backend [tool] (backend-advice #(tools/delegated-tool-dir % tool) tool))
 
