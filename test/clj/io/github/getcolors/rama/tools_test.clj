@@ -1,5 +1,5 @@
 (ns io.github.getcolors.rama.tools-test
-  (:require [clojure.string :as str]
+  (:require [cheshire.core] [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [io.github.getcolors.rama.tools :as sut]))
 (deftest dns-is-unproxied
@@ -58,3 +58,8 @@
                     (is (= "rama" (get-in config [:extra-vars :ssh_legacy_marker_prefix])))
                     received)]
       (is (= opts (sut/ansible-local-step opts))))))
+
+(deftest compute-json-accepts-library-mixed-key-maps
+  (is (= {"backups" true "region" "ams"}
+         (cheshire.core/parse-string
+          (#'io.github.getcolors.rama.tools/compute-json {:region "ams" "backups" true} 0)))))
