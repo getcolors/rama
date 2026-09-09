@@ -1,0 +1,21 @@
+{
+  "all" : {
+    "children" : {
+      "rama" : {
+        "hosts" : {
+          "rama-fixture" : {
+            "ansible_host" : "192.0.2.10",
+            "ansible_user" : "root"
+          }
+        }
+      },
+      "local" : {
+        "hosts" : {
+          "localhost" : {
+            "ansible_connection" : "local"
+          }
+        }
+      }
+    }
+  }
+}

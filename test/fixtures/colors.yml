@@ -3,7 +3,7 @@ workdir: WORKDIR
 provider-compute: digitalocean
 provider-dns: false
 provider-smtp: false
-provider-backend: local
+provider-backend: r2
 compute-prevent-destroy: true
 rama-cluster-name: rama-fixture
 rama-deployment: single-node
@@ -32,3 +32,6 @@ rama-host: rama.example.com
 cloudflare-zone: example.com
 cloudflare-proxied: false
 rama-smtp-from: rama@notifications.example.com
+
+r2-bucket: rama-state
+r2-endpoint: https://example.r2.cloudflarestorage.com

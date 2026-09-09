@@ -1,0 +1,11 @@
+{
+  "terraform" : {
+    "backend" : {
+      "s3" : {
+        "bucket" : "rama-state",
+        "key" : "rama-fixture/tofu-smtp.tfstate",
+        "region" : "us-east-1"
+      }
+    }
+  }
+}

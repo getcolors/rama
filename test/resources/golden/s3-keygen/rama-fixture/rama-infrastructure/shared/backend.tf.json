@@ -1,0 +1,12 @@
+{
+  "terraform": {
+    "backend": {
+      "s3": {
+        "bucket": "rama-state",
+        "key": "rama-fixture/compute/shared.tfstate",
+        "region": "us-east-1",
+        "use_lockfile": true
+      }
+    }
+  }
+}

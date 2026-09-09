@@ -2,7 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [io.github.getcolors.rama.validate :as sut]))
 (def valid {:profile "x" :workdir ".colors" :provider-compute "digitalocean"
- :provider-backend "local" :provider-dns false :provider-smtp false
+ :provider-backend "s3" :provider-dns false :provider-smtp false
  :compute-prevent-destroy true :rama-cluster-name "x" :rama-deployment "single-node"
  :rama-version "1" :rama-source-url "https://x" :zookeeper-version "1"
  :zookeeper-source-url "https://x" :java-version 21 :rama-data-dir "/data/rama"
@@ -18,6 +18,6 @@
   (is (empty? (sut/state-errors valid)))
   (is (< 1 (count (sut/state-errors (-> valid (dissoc :profile) (assoc :provider-dns "bad")))))))
 (deftest optional-provider-secrets
-  (is (= ["required credential is not set: COLORS_PAR_DO_TOKEN"]
+  (is (= []
          (vec (sut/secret-errors valid))))
-  (is (= 4 (count (sut/secret-errors (assoc valid :provider-dns "cloudflare" :provider-smtp "resend"))))))
+  (is (= 3 (count (sut/secret-errors (assoc valid :provider-dns "cloudflare" :provider-smtp "resend"))))))

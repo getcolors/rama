@@ -11,6 +11,12 @@
             [green.workflow :as wf]
             [io.github.getcolors.once.tools :as once-tools]
             [io.github.getcolors.rama.operator :as operator]
+            [io.github.getcolors.rama.compute :as compute]
+            [io.github.getcolors.compute :as library]
+            [io.github.getcolors.compute-deployment-request :as deployment]
+            [io.github.getcolors.compute-planning :as planning]
+            [io.github.getcolors.compute-orchestration :as orchestration]
+            [io.github.getcolors.compute-inspection :as inspection]
             [io.github.getcolors.rama.utils :as utils]
             [io.github.getcolors.rama.validate :as validate]))
 
@@ -19,6 +25,7 @@
 (def dns-tool "rama-dns")
 (def smtp-post-tool "tofu-smtp-post")
 (def ansible-tool "rama-ansible")
+(def ansible-local-tool "rama-ansible-local")
 (def root "io.github.getcolors.rama.tools")
 (def template-opts sc/preserve-jinja-delimiters)
 
@@ -40,40 +47,87 @@
          (apply merge (map #(validate/tofu-env opts %) (conj (vec slots) :provider-backend))))))
 (defn backend-credential-env [opts] (credential-env opts))
 
-(defn ssh-fingerprint [path]
-  (let [path (str/replace (str path) "~/" (str (System/getProperty "user.home") "/"))
-        result (process/run ["ssh-keygen" "-E" "md5" "-lf" path])]
-    (if (zero? (:exit result))
-      (or (some-> (second (re-find #"(MD5:[0-9a-f:]+)" (:out result)))
-                  (str/replace "MD5:" ""))
-          "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00")
-      "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00")))
-
-(defn fallback-params [opts]
-  {:ip "192.0.2.10" :user "root" :sudoer "root" :name (:profile opts)})
-
-(defn infrastructure-data [opts]
-  (assoc opts
-         :digitalocean-ssh-key-fingerprint
-         (if (= :build (:green/event opts))
-           "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
-           (ssh-fingerprint (:digitalocean-ssh-authorized-keys opts)))
-         :ssh-sources-hcl (tofu/hcl-list (cidrs opts :digitalocean-ssh-sources))
-         :wireguard-sources-hcl (tofu/hcl-list (cidrs opts :digitalocean-wireguard-sources))))
-
-(defn output-params [result]
-  (some-> (get-in result [:tofu/outputs :params]) walk/keywordize-keys))
+(defn- compute-json [value indent]
+  (let [padding #(apply str (repeat % " "))]
+    (cond
+      (map? value) (if (empty? value) "{}"
+                      (str "{\n" (str/join ",\n" (for [[key item] (sort-by key value)]
+                                                       (str (padding (+ indent 2)) (json/generate-string key) ": " (compute-json item (+ indent 2)))))
+                           "\n" (padding indent) "}"))
+      (sequential? value) (if (empty? value) "[]"
+                              (str "[\n" (str/join ",\n" (map #(str (padding (+ indent 2)) (compute-json % (+ indent 2))) value)) "\n" (padding indent) "]"))
+      :else (json/generate-string value))))
 
 (defn infrastructure-step [opts]
-  (let [dir (tool-dir opts infrastructure-tool) data (infrastructure-data opts)
-        specs [(spec (template "infrastructure" "main.tf") (str dir "/main.tf") data)]
-        result (tofu/tofu-with-spec opts specs
-                                    {:dir dir :env (credential-env opts :provider-compute)})]
-    (cond
-      (wf/failed? result) result
-      (= :build (:green/event opts)) (merge result (fallback-params opts))
-      (= :delete (:green/event opts)) result
-      :else (merge result (fallback-params opts) (output-params result)))))
+  (try
+    (let [planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
+          result (if planning?
+                   (planning/plan-deployment opts (compute/topology opts) (compute/requirements opts))
+                   (orchestration/orchestrate opts (compute/topology opts) (compute/requirements opts)))]
+      (when planning?
+        (doseq [[stage key] (cons ["shared" (get-in result [:state_keys :shared])]
+                                 (map (fn [[id key]] [(str "nodes/" (name id)) key]) (get-in result [:state_keys :nodes]))) ]
+          (let [target (io/file (tool-dir opts infrastructure-tool) stage "backend.tf.json")]
+            (io/make-parents target)
+            (spit target (str (compute-json (:config (library/backend-plan opts key)) 0) "\n"))))
+        (doseq [[stage documents] (cons ["shared" (get-in result [:documents :shared])]
+                                      (map (fn [[id documents]] [(str "nodes/" id) documents]) (get-in result [:documents :nodes])))
+                [filename document] documents]
+          (let [target (io/file (tool-dir opts infrastructure-tool) stage filename)]
+            (io/make-parents target)
+            (spit target (str (compute-json document 0) "\n")))))
+      (if-not (contains? #{"ready" "planned" "destroyed"} (:status result))
+        (assoc opts :green/exit 1 :green/err (if (seq (:errors result)) (str/join "\n" (:errors result)) "compute lifecycle refused; inspect state ownership and configuration"))
+        (cond-> (assoc opts :green/exit 0)
+          (:shared result) (assoc :colors-compute/shared (:shared result))
+          (:cluster result) (assoc :colors-compute/cluster (:cluster result) :ip (get-in result [:cluster :nodes 0 :ip]) :user (get-in result [:cluster :nodes 0 :user]))
+          (get-in result [:key :private_key_path])
+          (assoc :ssh-private-key-path (if planning? (str/replace (get-in result [:key :private_key_path]) "$HOME/.ssh" "/home/build-placeholder/.ssh") (get-in result [:key :private_key_path]))))))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; legacy monolithic state requires explicit migration"))))
+
+(defn load-infrastructure-step [opts]
+  (try
+    (let [result (inspection/read-deployment opts (into {} (System/getenv)) {} (compute/requirements opts))]
+      (case (:status result)
+        "present" (let [node (first (get-in result [:cluster :nodes]))]
+                    (cond-> (assoc opts :colors-compute/cluster (:cluster result)
+                                       :colors-compute/shared (:shared result)
+                                       :ip (:ip node) :user (:user node) :green/exit 0)
+                      (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node))))
+        "destroyed" (if (= :delete (:green/event opts)) (assoc opts :rama/already-destroyed true :green/exit 0)
+                        (assoc opts :green/exit 1 :green/err "compute deployment is destroyed"))
+        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required")))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required"))))
+
+
+(defn fallback-params [opts] (compute/node opts))
+
+(defn ansible-local-specs [opts]
+  (let [dir (tool-dir opts ansible-local-tool)
+        data (assoc (merge opts (compute/node opts) {:host-alias (utils/host-alias opts)})
+                    :ssh-keygen (validate/keygen? opts)
+                    :ssh-config-identity-file (str "~/.ssh/" (:profile opts)))]
+    [(spec (template "ansible-local" "ansible.cfg")
+           (str dir "/ansible.cfg") data)
+     (spec (template "ansible-local" "inventory.ini")
+           (str dir "/inventory.ini") data)
+     (spec (template "ansible-local" "main.yml")
+           (str dir "/main.yml") data)]))
+
+(defn ansible-local-step [opts]
+  (let [dir (tool-dir opts ansible-local-tool)
+        data (merge opts (compute/node opts) {:host-alias (utils/host-alias opts)})
+        delete? (= :delete (:green/event opts))]
+    (ansible/ansible-with-spec
+     opts
+     {:dir dir :inventory "inventory.ini"
+      :playbooks {:create "main.yml" :delete "main.yml"}
+      :extra-vars {:host_alias (:host-alias data)
+                   :ssh_hosts [{:name (:host-alias data) :ip (:ip data) :user (:user data)}]
+                   :ssh_legacy_marker_prefix "rama"
+                   :block_state (if delete? "absent" "present")}}
+     (ansible-local-specs opts))))
+
 
 (defn smtp-step [opts]
   (once-tools/tofu-smtp-step (utils/once-shape opts)))
@@ -105,15 +159,16 @@
   (json/generate-string
    {:all {:children
           {:rama {:hosts {(utils/host-alias opts)
-                          {:ansible_host (or (:ip opts) "192.0.2.10")
-                           :ansible_user "root"}}}
+                          (cond-> {:ansible_host (:ip (compute/node opts)) :ansible_user (:user (compute/node opts))}
+                            (:ssh-private-key-path opts) (assoc :ansible_ssh_private_key_file (:ssh-private-key-path opts))
+                            (validate/keygen? opts) (assoc :ansible_ssh_common_args "-o IdentitiesOnly=yes"))}}
            :local {:hosts {:localhost {:ansible_connection "local"}}}}}}
    {:pretty true}))
 
 (defn ansible-data [opts]
   (let [[lo hi] (:rama-supervisor-port-range opts)
         server-ip (utils/vpn-ip (:wireguard-server-address opts))
-        ssh-source (first (cidrs opts :digitalocean-ssh-sources))]
+        ssh-source (first (deployment/source-cidrs opts "ssh-sources" "rama-ssh-sources"))]
     (assoc opts
            :ip (or (:ip opts) "192.0.2.10")
            :wireguard-server-ip server-ip
@@ -146,8 +201,10 @@
     (assoc opts :green/exit 0)
     (let [ip (:ip opts)
           remote (process/run-with-timeout
-                  ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"
-                   (str "root@" ip) "systemctl is-active zookeeper conductor supervisor wg-quick@wg-rama"]
+                  (vec (concat ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"]
+                               (when (:ssh-private-key-path opts) ["-i" (:ssh-private-key-path opts)])
+                               (when (validate/keygen? opts) ["-o" "IdentitiesOnly=yes"])
+                               [(str (:user (compute/node opts)) "@" ip) "sudo systemctl is-active zookeeper conductor supervisor wg-quick@wg-rama"]))
                   {} 30000)
           state-file (:green/state-file opts)
           ready (when (zero? (:exit remote)) (operator/run state-file ["conductorReady"]))

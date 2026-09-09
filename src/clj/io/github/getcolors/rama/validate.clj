@@ -2,7 +2,9 @@
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
             [io.github.getcolors.once.validate :as once-validate]
-            [io.github.getcolors.rama.utils :as utils]))
+            [io.github.getcolors.rama.utils :as utils]
+            [io.github.getcolors.compute :as library]
+            [io.github.getcolors.compute-ssh :as ssh]))
 
 (def profile-par (green-cli/par-name :profile))
 (defn env-errors [env]
@@ -13,10 +15,7 @@
   [:profile :workdir :provider-compute :provider-backend :compute-prevent-destroy
    :rama-cluster-name :rama-deployment :rama-version :rama-source-url
    :zookeeper-version :zookeeper-source-url :java-version :rama-data-dir
-   :rama-supervisor-port-range :digitalocean-name :digitalocean-region
-   :digitalocean-size :digitalocean-image :digitalocean-ssh-authorized-keys
-   :digitalocean-vpc-cidr :digitalocean-ssh-sources
-   :digitalocean-wireguard-sources :wireguard-port :wireguard-network-cidr
+   :rama-supervisor-port-range :wireguard-port :wireguard-network-cidr
    :wireguard-server-address :wireguard-client-address :wireguard-client-name
    :rama-host :cloudflare-zone :rama-smtp-from])
 
@@ -26,10 +25,8 @@
 (defn state-errors [opts]
   (vec (concat
         (for [k required :when (missing? (get opts k))] (str k " is required"))
-        (when-not (= "digitalocean" (:provider-compute opts))
-          [":provider-compute must be digitalocean"])
-        (when-not (contains? #{"local" "s3" "r2"} (:provider-backend opts))
-          [":provider-backend must be local, s3, or r2"])
+        (when-not (contains? #{"s3" "r2"} (:provider-backend opts))
+          [":provider-backend must be s3 or r2"])
         (when-not (contains? #{nil "cloudflare"} (utils/provider (:provider-dns opts)))
           [":provider-dns must be cloudflare, null, false, or no"])
         (when-not (contains? #{nil "resend"} (utils/provider (:provider-smtp opts)))
@@ -47,7 +44,7 @@
 
 (defn tofu-env [opts slot]
   (case slot
-    :provider-compute {:do-token "DIGITALOCEAN_TOKEN"}
+    :provider-compute {}
     :provider-dns (if (= "cloudflare" (utils/provider (:provider-dns opts)))
                     {:cloudflare-api-token "CLOUDFLARE_API_TOKEN"} {})
     :provider-smtp (if (= "resend" (utils/provider (:provider-smtp opts)))
@@ -57,7 +54,7 @@
     {}))
 
 (defn secret-errors [opts]
-  (let [keys (concat [:do-token]
+  (let [keys (concat []
                      (when (= "cloudflare" (utils/provider (:provider-dns opts)))
                        [:cloudflare-api-token])
                      (when (= "resend" (utils/provider (:provider-smtp opts)))
@@ -67,3 +64,5 @@
                                        [:provider-backend (:provider-backend opts)])))]
     (for [k (distinct keys) :when (missing? (get opts k))]
       (str "required credential is not set: " (green-cli/par-name k)))))
+
+(defn keygen? [opts] (= "managed" (:mode (ssh/mode opts))))

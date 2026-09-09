@@ -3,7 +3,7 @@
 `colors.yml` is a flat map. The worked deployment is `rama-digitalocean`.
 
 - Compute: `provider-compute: digitalocean`, region, size, Ubuntu image, local
-  SSH public-key path, VPC CIDR, SSH source CIDRs, and WireGuard source CIDRs.
+  SSH public-key path (optional), VPC CIDR, SSH source CIDRs, and WireGuard source CIDRs.
 - Rama: exact Rama ZIP URL/version, exact ZooKeeper URL/version, Java version,
   data directory, and supervisor port range.
 - VPN: UDP port, network, server/client addresses, and client interface name.
@@ -11,7 +11,7 @@
   DNS-only A record. Disabled DNS makes WireGuard use the public IP.
 - Mail: `provider-smtp: resend` or `null`/`false`/`no`; enabled mode creates and
   verifies `notifications.<zone>` and configures the Resend SMTP relay.
-- State: `provider-backend: local`, `s3`, or `r2`.
+- State: `provider-backend: s3` or `r2`.
 - License: `rama-license: false` by default. If true, provide the local path as
   `COLORS_PAR_RAMA_LICENSE_SOURCE_PATH`.
 
@@ -22,3 +22,13 @@ Credentials for enabled providers are `COLORS_PAR_DO_TOKEN`,
 `compute-prevent-destroy: true` is mandatory committed desired state. For one
 authorized deletion only, overlay it with
 `COLORS_PAR_COMPUTE_PREVENT_DESTROY=false`.
+
+Compute configuration is interpreted by the pinned colors-compute library.
+Omitting both `digitalocean-ssh-keys` and `digitalocean-ssh-authorized-keys`
+enables managed keygen. Select only one external reference: account key IDs or a
+regular `.pub` file for an already registered account key. External keys remain
+untouched. Build uses a deterministic fingerprint without reading the file.
+R2 requires `COLORS_PAR_R2_ACCESS_KEY_ID` and `COLORS_PAR_R2_SECRET_ACCESS_KEY`;
+S3 uses the ambient AWS credential chain. Legacy monolithic compute state must
+be explicitly migrated before create/delete. The library's split state keys are
+`<profile>/compute/shared.tfstate` and `<profile>/compute/nodes/0.tfstate`.

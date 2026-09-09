@@ -11,8 +11,9 @@ VPN-aware `green rama` adapter. The first consumer is
 
 The repository ships `package-rama-green` and its `green` launcher payload.
 The root `./green` is a symlink to that payload. The package depends on Green
-and reuses ONCE's Resend registration and verification stages; DigitalOcean
-infrastructure, DNS, WireGuard, machine convergence, acceptance, and the Rama
+and reuses ONCE's Resend registration and verification stages. colors-compute
+owns provider compute, shared/node state, firewall, and SSH key lifecycle; DNS,
+WireGuard, machine convergence, acceptance, and the Rama
 adapter are package-owned.
 
 ## Commands
@@ -73,7 +74,7 @@ cp .agents/skills/package-rama-green/green green
 
 A change spanning Green, ONCE, Rama, and a deployment is a separate commit in
 each repository, pushed upstream first. For local cross-boundary development,
-use `GREEN_LIB_ROOT`, `ONCE_LIB_ROOT`, or `RAMA_LIB_ROOT` rather than editing a
+use `GREEN_LIB_ROOT`, `ONCE_LIB_ROOT`, `COLORS_COMPUTE_LIB_ROOT`, or `RAMA_LIB_ROOT` rather than editing a
 SHA.
 
 `bb golden` protects rendered infrastructure, stage/state names, the ONCE reuse
@@ -94,3 +95,12 @@ reference, and consumer documentation aligned with behavior.
 ## Git
 
 Work on the current branch. Do not commit or push unless explicitly asked.
+
+Compute requests a singleton with a created private network and only SSH/admin
+and WireGuard UDP public ingress. Keep provider resources in colors-compute and
+consume its normalized inventory; never infer a missing deployment from a failed
+state read. Remote R2/S3 shared and node states replace the legacy monolith,
+which requires explicit migration. Application cleanup must succeed before SSH
+config removal and compute destruction. The library destroys owned keys last.
+The optional `digitalocean-ssh-authorized-keys` public file selects an externally
+owned account key; omission selects managed keygen. Build never reads that file.

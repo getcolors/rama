@@ -10,7 +10,7 @@
             [io.github.getcolors.rama.tools :as tools]
             [io.github.getcolors.rama.validate :as validate]))
 
-(def defaults {:provider-compute "digitalocean" :provider-backend "local"
+(def defaults {:provider-compute "digitalocean" :provider-backend "r2"
                :provider-dns false :provider-smtp false :rama-license false
                :compute-prevent-destroy true :workdir ".colors"})
 
@@ -20,11 +20,10 @@
        (catch Exception _ nil)))
 
 (defn adopt-existing-state [opts]
-  (let [infra (state-output opts (tools/tool-dir opts tools/infrastructure-tool))
-        smtp (state-output opts (tools/delegated-tool-dir opts tools/smtp-tool))]
-    (cond-> opts
-      infra (merge infra)
-      smtp (-> (merge smtp) (assoc :once/smtp-params smtp)))))
+  (let [result (tools/load-infrastructure-step opts)]
+    (if (wf/failed? result) result
+      (if-let [smtp (state-output result (tools/delegated-tool-dir result tools/smtp-tool))]
+        (assoc (merge result smtp) :once/smtp-params smtp) result))))
 
 (defn start-step
   ([opts] (start-step opts (System/getenv)))
@@ -44,7 +43,7 @@
           :after-validate
           (fn [opts _ {:keys [event real?]}]
             (if (and real? (= :delete event))
-              (assoc (adopt-existing-state opts) :green/exit 0)
+              (adopt-existing-state opts)
               (assoc opts :green/exit 0)))}
     env)))
 
@@ -55,11 +54,13 @@
       :rama/ansible [tools/ansible-step :rama/smtp-post]
       :rama/smtp-post [tools/smtp-post-step :rama/dns]
       :rama/dns [tools/dns-step :rama/smtp]
-      :rama/smtp [tools/smtp-step :rama/infrastructure]
+      :rama/smtp [tools/smtp-step :rama/ansible-local]
+      :rama/ansible-local [tools/ansible-local-step :rama/infrastructure]
       :rama/infrastructure [tools/infrastructure-step])
     (case step
       :rama/start [start-step :rama/infrastructure]
-      :rama/infrastructure [tools/infrastructure-step :rama/smtp]
+      :rama/infrastructure [tools/infrastructure-step :rama/ansible-local]
+      :rama/ansible-local [tools/ansible-local-step :rama/smtp]
       :rama/smtp [tools/smtp-step :rama/dns]
       :rama/dns [tools/dns-step :rama/smtp-post]
       :rama/smtp-post [tools/smtp-post-step :rama/ansible]
@@ -73,11 +74,11 @@
 (defn delegated-backend [tool] (backend-advice #(tools/delegated-tool-dir % tool) tool))
 
 (def side-effecting [:rama/infrastructure :rama/smtp :rama/dns :rama/smtp-post
-                     :rama/ansible :rama/acceptance])
+                     :rama/ansible-local :rama/ansible :rama/acceptance])
 
 (def workflow
-  (-> (wf/workflow {:start :rama/start :wire-fn wire-fn})
-      (wf/advice-add :rama/infrastructure :before ::backend (own-backend tools/infrastructure-tool))
+  (-> (wf/workflow {:start :rama/start :wire-fn wire-fn
+                    :next-fn (fn [_ successors opts] (if (or (wf/failed? opts) (:rama/already-destroyed opts)) [] (mapv #(vector % opts) successors)))})
       (wf/advice-add :rama/smtp :before ::backend (delegated-backend tools/smtp-tool))
       (wf/advice-add :rama/dns :before ::backend (own-backend tools/dns-tool))
       (wf/advice-add :rama/smtp-post :before ::backend (delegated-backend tools/smtp-post-tool))

@@ -9,5 +9,5 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cp "$launcher" "$tmp/green"; chmod +x "$tmp/green"
 sed "s#WORKDIR#.colors#" "$root/test/fixtures/colors.yml" > "$tmp/colors.yml"
 (cd "$tmp" && RAMA_LIB_ROOT="$root" ./green build >/dev/null)
-[[ -f "$tmp/.colors/rama-fixture/rama-infrastructure/main.tf" ]]
+[[ -f "$tmp/.colors/rama-fixture/rama-infrastructure/nodes/0/node.tf.json" ]]
 echo 'launcher: all checks passed'
